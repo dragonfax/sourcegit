@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 
 using Avalonia.Collections;
 using Avalonia.Threading;
@@ -10,6 +12,26 @@ namespace SourceGit.ViewModels
 {
     public class Launcher : ObservableObject
     {
+        // All open launcher windows. The first one is the primary window.
+        public static IReadOnlyList<Launcher> All => _all;
+
+        // The launcher whose window was most recently activated.
+        public static Launcher Current
+        {
+            get => _current ?? Primary;
+            set => _current = value;
+        }
+
+        public static Launcher Primary => _all.Count > 0 ? _all[0] : null;
+
+        // True while the app is quitting or switching workspace: closing windows must not drop their repos from the workspace.
+        public static bool KeepWorkspaceOnClose { get; set; }
+
+        public bool IsPrimary => _all.Count > 0 && _all[0] == this;
+
+        public event Action CloseWindowRequested;
+        public event Action BringToTopRequested;
+
         public AvaloniaList<LauncherPage> Pages
         {
             get;
@@ -46,6 +68,7 @@ namespace SourceGit.ViewModels
 
         public Launcher(string startupRepo)
         {
+            _all.Add(this);
             Models.Notification.Raised += DispatchNotification;
             _ignoreIndexChange = true;
 
@@ -69,6 +92,126 @@ namespace SourceGit.ViewModels
             }
 
             PostActivePageChanged();
+        }
+
+        // Creates a secondary launcher (window) that takes over `page`.
+        private Launcher(LauncherPage page)
+        {
+            _all.Add(this);
+            ActiveWorkspace = Primary.ActiveWorkspace;
+            Pages = new AvaloniaList<LauncherPage> { page };
+            _activePage = page;
+        }
+
+        public void MakeCurrent()
+        {
+            _current = this;
+        }
+
+        public void RequestBringToTop()
+        {
+            BringToTopRequested?.Invoke();
+        }
+
+        public bool CanDetach(LauncherPage page)
+        {
+            return page is { Data: Repository };
+        }
+
+        // Moves `page` out of this launcher into a brand new one.
+        public Launcher DetachToNewLauncher(LauncherPage page)
+        {
+            if (!DetachTab(page))
+                return null;
+
+            var launcher = new Launcher(page);
+            SyncWorkspace();
+            return launcher;
+        }
+
+        // Moves `page` from `from` into `to`, placed before `before` (or at the end).
+        public static void MoveTabAcross(Launcher from, LauncherPage page, Launcher to, LauncherPage before)
+        {
+            if (from == to || !from.DetachTab(page))
+                return;
+
+            var idx = before == null ? -1 : to.Pages.IndexOf(before);
+            if (idx < 0)
+                to.Pages.Add(page);
+            else
+                to.Pages.Insert(idx, page);
+
+            to.ActivePage = page;
+            SyncWorkspace();
+        }
+
+        public static LauncherPage FindPage(string id, out Launcher owner)
+        {
+            foreach (var l in _all)
+            {
+                foreach (var p in l.Pages)
+                {
+                    if (p.Node.Id.Equals(id, StringComparison.Ordinal))
+                    {
+                        owner = l;
+                        return p;
+                    }
+                }
+            }
+
+            owner = null;
+            return null;
+        }
+
+        private bool DetachTab(LauncherPage page)
+        {
+            var idx = Pages.IndexOf(page);
+            if (idx < 0)
+                return false;
+
+            _ignoreIndexChange = true;
+
+            if (_activePage == page && Pages.Count > 1)
+                ActivePage = Pages[idx > 0 ? idx - 1 : idx + 1];
+
+            Pages.RemoveAt(idx);
+
+            if (Pages.Count == 0)
+            {
+                if (IsPrimary)
+                {
+                    AddNewTab();
+                }
+                else
+                {
+                    _all.Remove(this);
+                    if (_current == this)
+                        _current = null;
+                    CloseWindowRequested?.Invoke();
+                }
+            }
+
+            _ignoreIndexChange = false;
+            PostActivePageChanged();
+            return true;
+        }
+
+        // Rebuild the workspace's repository list from the tabs of all windows.
+        private static void SyncWorkspace()
+        {
+            var ws = Primary?.ActiveWorkspace;
+            if (ws == null)
+                return;
+
+            ws.Repositories.Clear();
+            foreach (var l in _all)
+            {
+                foreach (var p in l.Pages)
+                {
+                    if (p.Data is Repository r)
+                        ws.Repositories.Add(r.FullPath);
+                }
+            }
         }
 
         public bool TryOpenRepositoryFromPath(string repo)
@@ -114,16 +257,37 @@ namespace SourceGit.ViewModels
         {
             _ignoreIndexChange = true;
 
+            var remove = !IsPrimary && !KeepWorkspaceOnClose;
             foreach (var one in Pages)
-                CloseRepositoryInTab(one, false);
+                CloseRepositoryInTab(one, remove);
 
             _ignoreIndexChange = false;
+
+            if (!IsPrimary)
+            {
+                _all.Remove(this);
+                if (_current == this)
+                    _current = null;
+            }
         }
 
         public void SwitchWorkspace(Workspace to)
         {
+            if (!IsPrimary)
+            {
+                Primary.SwitchWorkspace(to);
+                return;
+            }
+
             if (to == null || to.IsActive)
                 return;
+
+            // Close the other windows first (their repos belong to the old workspace).
+            KeepWorkspaceOnClose = true;
+            foreach (var other in _all.Skip(1).ToArray())
+                other.CloseWindowRequested?.Invoke();
+            KeepWorkspaceOnClose = false;
+            _current = null;
 
             _ignoreIndexChange = true;
 
@@ -171,12 +335,7 @@ namespace SourceGit.ViewModels
             var toIdx = Pages.IndexOf(to);
             Pages.Move(fromIdx, toIdx);
 
-            _activeWorkspace.Repositories.Clear();
-            foreach (var p in Pages)
-            {
-                if (p.Data is Repository r)
-                    _activeWorkspace.Repositories.Add(r.FullPath);
-            }
+            SyncWorkspace();
 
             _ignoreIndexChange = false;
             ActivePage = from;
@@ -206,6 +365,13 @@ namespace SourceGit.ViewModels
         {
             if (Pages.Count == 1)
             {
+                if (!IsPrimary)
+                {
+                    // Closing the window closes the repository (see `CloseAll`).
+                    CloseWindowRequested?.Invoke();
+                    return;
+                }
+
                 var last = Pages[0];
                 if (last.Data is Repository repo)
                 {
@@ -299,13 +465,12 @@ namespace SourceGit.ViewModels
 
         public void OpenRepositoryInTab(RepositoryNode node, LauncherPage page)
         {
-            foreach (var one in Pages)
+            if (FindPage(node.Id, out var existingOwner) is { } existing)
             {
-                if (one.Node.Id == node.Id)
-                {
-                    ActivePage = one;
-                    return;
-                }
+                existingOwner.ActivePage = existing;
+                if (existingOwner != this)
+                    existingOwner.RequestBringToTop();
+                return;
             }
 
             if (!Directory.Exists(node.Id))
@@ -358,12 +523,7 @@ namespace SourceGit.ViewModels
                 page.Data = repo;
             }
 
-            _activeWorkspace.Repositories.Clear();
-            foreach (var p in Pages)
-            {
-                if (p.Data is Repository r)
-                    _activeWorkspace.Repositories.Add(r.FullPath);
-            }
+            SyncWorkspace();
 
             if (_activePage == page)
                 PostActivePageChanged();
@@ -376,13 +536,12 @@ namespace SourceGit.ViewModels
             var normalizedPath = fullpath.Replace('\\', '/').TrimEnd('/');
 
             // Check if the sub-repository is already open in any of the tabs
-            foreach (var one in Pages)
+            if (FindPage(normalizedPath, out var existingOwner) is { } existing)
             {
-                if (one.Node.Id.Equals(normalizedPath, StringComparison.Ordinal))
-                {
-                    ActivePage = one;
-                    return;
-                }
+                existingOwner.ActivePage = existing;
+                if (existingOwner != this)
+                    existingOwner.RequestBringToTop();
+                return;
             }
 
             // Make sure the target directory exists
@@ -433,11 +592,11 @@ namespace SourceGit.ViewModels
             var page = new LauncherPage(node, repo);
             var idxOfOwner = Pages.IndexOf(ownerPage);
             Pages.Insert(idxOfOwner + 1, page);
-            _activeWorkspace.Repositories.Insert(idxOfOwner + 1, normalizedPath);
+            SyncWorkspace();
             ActivePage = page;
         }
 
-        private void DispatchNotification(Models.Notification notification)
+        private static void DispatchNotification(Models.Notification notification)
         {
             if (!Dispatcher.UIThread.CheckAccess())
             {
@@ -447,21 +606,24 @@ namespace SourceGit.ViewModels
 
             if (string.IsNullOrEmpty(notification.Group))
             {
-                _activePage?.Notifications.Add(notification);
+                Current?._activePage?.Notifications.Add(notification);
                 return;
             }
 
-            foreach (var page in Pages)
+            foreach (var launcher in _all)
             {
-                var id = page.Node.Id.Replace('\\', '/').TrimEnd('/');
-                if (id.Equals(notification.Group, StringComparison.OrdinalIgnoreCase))
+                foreach (var page in launcher.Pages)
                 {
-                    page.Notifications.Add(notification);
-                    return;
+                    var id = page.Node.Id.Replace('\\', '/').TrimEnd('/');
+                    if (id.Equals(notification.Group, StringComparison.OrdinalIgnoreCase))
+                    {
+                        page.Notifications.Add(notification);
+                        return;
+                    }
                 }
             }
 
-            _activePage?.Notifications.Add(notification);
+            Current?._activePage?.Notifications.Add(notification);
         }
 
         private string GetRepositoryGitDir(string repo)
@@ -523,6 +685,9 @@ namespace SourceGit.ViewModels
 
             CommandPalette = null;
         }
+
+        private static readonly List<Launcher> _all = new();
+        private static Launcher _current;
 
         private Workspace _activeWorkspace;
         private LauncherPage _activePage;

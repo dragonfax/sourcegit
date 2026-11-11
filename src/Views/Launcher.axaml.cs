@@ -32,6 +32,13 @@ namespace SourceGit.Views
             }
         }
 
+        // Secondary windows (torn-off tabs) don't read or write the saved window layout.
+        public bool IsSecondary
+        {
+            get;
+            set;
+        }
+
         public Launcher()
         {
             if (OperatingSystem.IsMacOS())
@@ -81,6 +88,9 @@ namespace SourceGit.Views
         {
             base.OnOpened(e);
 
+            if (IsSecondary)
+                return;
+
             var preferences = ViewModels.Preferences.Instance;
             WindowState = preferences.Layout.LauncherWindowState;
         }
@@ -97,10 +107,14 @@ namespace SourceGit.Views
                 if (!OperatingSystem.IsMacOS() && !UseSystemWindowFrame)
                     CaptionHeight = new GridLength(state == WindowState.Maximized ? 30 : 38);
 
-                ViewModels.Preferences.Instance.Layout.LauncherWindowState = state;
+                if (!IsSecondary)
+                    ViewModels.Preferences.Instance.Layout.LauncherWindowState = state;
             }
             else if (change.Property == IsActiveProperty)
             {
+                if (IsActive && DataContext is ViewModels.Launcher active)
+                    active.MakeCurrent();
+
                 if (!IsActive && DataContext is ViewModels.Launcher { CommandPalette: { } } vm)
                     vm.CommandPalette = null;
             }
@@ -118,7 +132,7 @@ namespace SourceGit.Views
         {
             base.OnSizeChanged(e);
 
-            if (WindowState == WindowState.Normal)
+            if (WindowState == WindowState.Normal && !IsSecondary)
             {
                 var layout = ViewModels.Preferences.Instance.Layout;
                 layout.LauncherWidth = Width;
@@ -335,8 +349,14 @@ namespace SourceGit.Views
         {
             base.OnClosing(e);
 
-            if (!Design.IsDesignMode && DataContext is ViewModels.Launcher launcher)
-                launcher.CloseAll();
+            if (Design.IsDesignMode || DataContext is not ViewModels.Launcher launcher)
+                return;
+
+            // Closing the main window quits the app and every other window with it.
+            if (!IsSecondary)
+                ViewModels.Launcher.KeepWorkspaceOnClose = true;
+
+            launcher.CloseAll();
         }
 
         protected override void OnClosed(EventArgs e)
@@ -346,12 +366,62 @@ namespace SourceGit.Views
             if (!Design.IsDesignMode)
                 ViewModels.Preferences.Instance.Save();
 
-            App.Quit(0);
+            if (!IsSecondary)
+                App.Quit(0);
+        }
+
+        protected override void OnDataContextChanged(EventArgs e)
+        {
+            base.OnDataContextChanged(e);
+
+            if (_boundLauncher != null)
+            {
+                _boundLauncher.CloseWindowRequested -= Close;
+                _boundLauncher.BringToTopRequested -= BringToTop;
+            }
+
+            _boundLauncher = DataContext as ViewModels.Launcher;
+            if (_boundLauncher != null)
+            {
+                _boundLauncher.CloseWindowRequested += Close;
+                _boundLauncher.BringToTopRequested += BringToTop;
+            }
+        }
+
+        // Move a repository tab into a new window placed under the mouse cursor.
+        public void TearOff(ViewModels.LauncherPage page)
+        {
+            if (DataContext is not ViewModels.Launcher launcher || !launcher.CanDetach(page))
+                return;
+
+            var vm = launcher.DetachToNewLauncher(page);
+            if (vm == null)
+                return;
+
+            var window = new Launcher() { IsSecondary = true };
+            window.Width = Width;
+            window.Height = Height;
+            window.WindowStartupLocation = WindowStartupLocation.Manual;
+
+            if (Native.MacOSUtilities.TryGetCursorPosition(out var cx, out var cy))
+            {
+                var scale = RenderScaling;
+                window.Position = new PixelPoint((int)(cx * scale - 120 * scale), (int)(cy * scale - 16 * scale));
+            }
+            else
+            {
+                window.Position = new PixelPoint(Position.X + 40, Position.Y + 40);
+            }
+
+            window.DataContext = vm;
+            window.Show();
+            window.Activate();
+            vm.MakeCurrent();
         }
 
         private void OnPositionChanged(object sender, PixelPointEventArgs e)
         {
-            if (WindowState == WindowState.Normal)
+            if (WindowState == WindowState.Normal && !IsSecondary)
             {
                 var layout = ViewModels.Preferences.Instance.Layout;
                 layout.LauncherPositionX = Position.X;
@@ -447,6 +517,7 @@ namespace SourceGit.Views
             e.Handled = true;
         }
 
+        private ViewModels.Launcher _boundLauncher = null;
         private GridLength _captionHeight = new(32);
         private WindowState _lastWindowState = WindowState.Normal;
     }

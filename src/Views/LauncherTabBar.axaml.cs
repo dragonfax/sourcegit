@@ -63,6 +63,10 @@ namespace SourceGit.Views
         public LauncherTabBar()
         {
             InitializeComponent();
+
+            // Dropping on the empty part of the bar appends the tab (used when moving tabs between windows).
+            DragDrop.SetAllowDrop(this, true);
+            AddHandler(DragDrop.DropEvent, DropOnBar);
         }
 
         public override void Render(DrawingContext context)
@@ -254,43 +258,77 @@ namespace SourceGit.Views
 
                 var data = new DataTransfer();
                 data.Add(DataTransferItem.Create(_dndMainTabFormat, page.Node.Id));
-                await DragDrop.DoDragDropAsync(_pressedTabEvent, data, DragDropEffects.Move);
+
+                // Make the whole window a drop target during the drag, so anywhere inside it counts as
+                // "accepted". A drag that ends with no effect was dropped outside: tear the tab off.
+                var window = TopLevel.GetTopLevel(this) as Window;
+                var oldAllowDrop = window != null && DragDrop.GetAllowDrop(window);
+                if (window != null)
+                    DragDrop.SetAllowDrop(window, true);
+
+                DragDropEffects result;
+                try
+                {
+                    result = await DragDrop.DoDragDropAsync(_pressedTabEvent, data, DragDropEffects.Move);
+                }
+                finally
+                {
+                    if (window != null)
+                        DragDrop.SetAllowDrop(window, oldAllowDrop);
+                }
+
+                _pressedTabEvent = null;
+                _startDragTab = false;
+
+                if (result == DragDropEffects.None && OperatingSystem.IsMacOS() && window is Launcher launcherWindow)
+                    launcherWindow.TearOff(page);
             }
             e.Handled = true;
         }
 
         private void DropTab(object sender, DragEventArgs e)
         {
+            if (sender is Border { DataContext: ViewModels.LauncherPage to } && HandleTabDrop(e, to))
+                e.Handled = true;
+        }
+
+        private void DropOnBar(object sender, DragEventArgs e)
+        {
+            if (!e.Handled && HandleTabDrop(e, null))
+                e.Handled = true;
+        }
+
+        private bool HandleTabDrop(DragEventArgs e, ViewModels.LauncherPage to)
+        {
             if (e.DataTransfer.TryGetValue(_dndMainTabFormat) is not { Length: > 0 } id)
-                return;
+                return false;
 
             if (DataContext is not ViewModels.Launcher launcher)
-                return;
+                return false;
 
-            ViewModels.LauncherPage target = null;
-            foreach (var page in launcher.Pages)
-            {
-                if (page.Node.Id.Equals(id, StringComparison.Ordinal))
-                {
-                    target = page;
-                    break;
-                }
-            }
-
+            var target = ViewModels.Launcher.FindPage(id, out var owner);
             if (target == null)
-                return;
+                return false;
 
-            if (sender is not Border { DataContext: ViewModels.LauncherPage to })
-                return;
+            if (owner == launcher)
+            {
+                if (to == null || target == to)
+                    return false;
 
-            if (target == to)
-                return;
+                launcher.MoveTab(target, to);
+            }
+            else
+            {
+                if (!owner.CanDetach(target))
+                    return false;
 
-            launcher.MoveTab(target, to);
+                ViewModels.Launcher.MoveTabAcross(owner, target, launcher, to);
+                launcher.RequestBringToTop();
+            }
 
             _pressedTabEvent = null;
             _startDragTab = false;
-            e.Handled = true;
+            return true;
         }
 
         private void OnTabContextRequested(object sender, ContextRequestedEventArgs e)
