@@ -1699,17 +1699,7 @@ namespace SourceGit.ViewModels
 
         private LauncherPage GetOwnerPage()
         {
-            var launcher = App.GetLauncher();
-            if (launcher == null)
-                return null;
-
-            foreach (var page in launcher.Pages)
-            {
-                if (page.Node.Id.Equals(FullPath))
-                    return page;
-            }
-
-            return null;
+            return Launcher.FindPage(FullPath, out _);
         }
 
         private BranchTreeNode.Builder BuildBranchTree(List<Models.Branch> branches, List<Models.Remote> remotes, bool validateExpandedNodes = true)

@@ -39,7 +39,7 @@ namespace SourceGit
 
         public static readonly Command OpenPreferencesCommand = new Command(async _ =>
         {
-            if (Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime { MainWindow: { } owner })
+            if (GetOwnerWindow() is { } owner)
             {
                 var dialog = new Views.Preferences();
                 await dialog.ShowDialog(owner);
@@ -48,7 +48,7 @@ namespace SourceGit
 
         public static readonly Command OpenHotkeysCommand = new Command(async _ =>
         {
-            if (Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime { MainWindow: { } owner })
+            if (GetOwnerWindow() is { } owner)
             {
                 var dialog = new Views.Hotkeys();
                 await dialog.ShowDialog(owner);
@@ -67,7 +67,7 @@ namespace SourceGit
 
         public static readonly Command OpenAboutCommand = new Command(async _ =>
         {
-            if (Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime { MainWindow: { } owner })
+            if (GetOwnerWindow() is { } owner)
             {
                 var dialog = new Views.About();
                 await dialog.ShowDialog(owner);
@@ -104,7 +104,7 @@ namespace SourceGit
 
         public static readonly Command OpenSSHKeyHelperCommand = new Command(async _ =>
         {
-            if (Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime { MainWindow: { } owner })
+            if (GetOwnerWindow() is { } owner)
             {
                 var vm = new ViewModels.SSHKeyHelper();
                 var dialog = new Views.SSHKeyHelper() { DataContext = vm };

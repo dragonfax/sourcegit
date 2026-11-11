@@ -111,17 +111,8 @@ namespace SourceGit.ViewModels
 
         public void NavigateToCommit(string file, string sha, bool changeBlame)
         {
-            if (App.GetLauncher() is { Pages: { } pages })
-            {
-                foreach (var page in pages)
-                {
-                    if (page.Data is Repository repo && repo.FullPath.Equals(_repo))
-                    {
-                        repo.NavigateToCommit(sha);
-                        break;
-                    }
-                }
-            }
+            if (Launcher.FindPage(_repo, out _) is { Data: Repository repo })
+                repo.NavigateToCommit(sha);
 
             if (!changeBlame || Revision.SHA.StartsWith(sha, StringComparison.Ordinal))
                 return;
@@ -140,17 +131,8 @@ namespace SourceGit.ViewModels
 
         private void NavigateToCommit(RevisionInfo rev)
         {
-            if (App.GetLauncher() is { Pages: { } pages })
-            {
-                foreach (var page in pages)
-                {
-                    if (page.Data is Repository repo && repo.FullPath.Equals(_repo))
-                    {
-                        repo.NavigateToCommit(rev.SHA);
-                        break;
-                    }
-                }
-            }
+            if (Launcher.FindPage(_repo, out _) is { Data: Repository repo })
+                repo.NavigateToCommit(rev.SHA);
 
             if (!Revision.SHA.StartsWith(rev.SHA, StringComparison.Ordinal))
                 SetBlameData(rev);

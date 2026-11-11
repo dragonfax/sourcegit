@@ -177,6 +177,38 @@ namespace SourceGit.Native
     [SupportedOSPlatform("macOS")]
     public static class MacOSUtilities
     {
+        [DllImport("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")]
+        private static extern IntPtr CGEventCreate(IntPtr source);
+
+        [DllImport("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")]
+        private static extern CGPoint CGEventGetLocation(IntPtr evt);
+
+        [DllImport("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")]
+        private static extern void CFRelease(IntPtr cf);
+
+        // Global cursor position in points, origin at the top-left of the primary screen.
+        public static bool TryGetCursorPosition(out double x, out double y)
+        {
+            x = y = 0;
+
+            try
+            {
+                var evt = CGEventCreate(IntPtr.Zero);
+                if (evt == IntPtr.Zero)
+                    return false;
+
+                var p = CGEventGetLocation(evt);
+                CFRelease(evt);
+                x = p.X;
+                y = p.Y;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         [StructLayout(LayoutKind.Sequential)]
         public struct CGPoint
         {

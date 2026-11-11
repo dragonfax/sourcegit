@@ -198,16 +198,8 @@ namespace SourceGit.ViewModels
             node.Bookmark = _bookmark;
             await node.UpdateStatusAsync(false, null);
 
-            var launcher = App.GetLauncher();
-            LauncherPage page = null;
-            foreach (var one in launcher.Pages)
-            {
-                if (one.Node.Id == _pageId)
-                {
-                    page = one;
-                    break;
-                }
-            }
+            var page = Launcher.FindPage(_pageId, out var owner);
+            var launcher = owner ?? App.GetLauncher();
 
             Welcome.Instance.Refresh();
             launcher.OpenRepositoryInTab(node, page);

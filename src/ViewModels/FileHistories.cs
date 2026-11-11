@@ -276,18 +276,8 @@ namespace SourceGit.ViewModels
 
         public void NavigateToCommit(Models.FileVersion revision)
         {
-            var launcher = App.GetLauncher();
-            if (launcher != null)
-            {
-                foreach (var page in launcher.Pages)
-                {
-                    if (page.Data is Repository repo && repo.FullPath.Equals(_repo, StringComparison.Ordinal))
-                    {
-                        repo.NavigateToCommit(revision.SHA);
-                        break;
-                    }
-                }
-            }
+            if (Launcher.FindPage(_repo, out _) is { Data: Repository repo })
+                repo.NavigateToCommit(revision.SHA);
         }
 
         public string GetCommitFullMessage(Models.FileVersion revision)

@@ -76,7 +76,7 @@ namespace SourceGit
         #region Utility Functions
         public static async Task<bool> AskConfirmAsync(string message, Models.ConfirmButtonType buttonType = Models.ConfirmButtonType.OkCancel)
         {
-            if (Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime { MainWindow: { } owner })
+            if (GetOwnerWindow() is { } owner)
             {
                 var confirm = new Views.Confirm();
                 confirm.SetData(message, buttonType);
@@ -88,7 +88,7 @@ namespace SourceGit
 
         public static async Task<Models.ConfirmEmptyCommitResult> AskConfirmEmptyCommitAsync(bool hasLocalChanges, bool hasSelectedUnstaged)
         {
-            if (Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime { MainWindow: { } owner })
+            if (GetOwnerWindow() is { } owner)
             {
                 var confirm = new Views.ConfirmEmptyCommit();
                 confirm.TxtMessage.Text = Text(hasLocalChanges ? "ConfirmEmptyCommit.WithLocalChanges" : "ConfirmEmptyCommit.NoLocalChanges");
@@ -224,11 +224,31 @@ namespace SourceGit
 
         public static ViewModels.Launcher GetLauncher()
         {
-            return Current is App app ? app._launcher : null;
+            return Current is App app ? (ViewModels.Launcher.Current ?? app._launcher) : null;
+        }
+
+        // The window dialogs should be attached to: the most recently active launcher window.
+        public static Window GetOwnerWindow()
+        {
+            if (Current?.ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime desktop)
+                return null;
+
+            var current = ViewModels.Launcher.Current;
+            if (current != null)
+            {
+                foreach (var w in desktop.Windows)
+                {
+                    if (w is Views.Launcher { DataContext: ViewModels.Launcher l } && l == current)
+                        return w;
+                }
+            }
+
+            return desktop.MainWindow;
         }
 
         public static void Quit(int exitCode)
         {
+            ViewModels.Launcher.KeepWorkspaceOnClose = true;
             if (Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
                 desktop.Shutdown(exitCode);
             else
@@ -481,7 +501,7 @@ namespace SourceGit
                 activatable.Activated += (_, e) =>
                 {
                     if (e is FileActivatedEventArgs { Files: { Count: > 0 } } fileArgs)
-                        _launcher?.TryOpenRepositoryFromPath(fileArgs.Files[0].Path.LocalPath);
+                        GetLauncher()?.TryOpenRepositoryFromPath(fileArgs.Files[0].Path.LocalPath);
                 };
             }
 
@@ -520,9 +540,9 @@ namespace SourceGit
             {
                 Dispatcher.UIThread.Invoke(() =>
                 {
-                    _launcher.TryOpenRepositoryFromPath(repo);
-                    if (desktop.MainWindow is Views.Launcher main)
-                        main.BringToTop();
+                    var launcher = GetLauncher();
+                    launcher.TryOpenRepositoryFromPath(repo);
+                    launcher.RequestBringToTop();
                 });
             };
 
@@ -581,7 +601,7 @@ namespace SourceGit
             {
                 Dispatcher.UIThread.Invoke(async () =>
                 {
-                    if (Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime { MainWindow: { } owner })
+                    if (GetOwnerWindow() is { } owner)
                     {
                         var ctx = new ViewModels.SelfUpdate { Data = data };
                         var dialog = new Views.SelfUpdate() { DataContext = ctx };
