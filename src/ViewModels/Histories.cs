@@ -548,23 +548,46 @@ namespace SourceGit.ViewModels
                 else
                     DetailContext = new CommitDetail(_repo, _commitDetailSharedData) { Commit = c };
             }
-            else if (_selectedCommits.Count == 2)
-            {
-                _searchCommitContext.Selected = null;
-
-                if (_detailContext is RevisionCompare compare)
-                    compare.SetTargets(_selectedCommits[1], _selectedCommits[0]);
-                else
-                    DetailContext = new RevisionCompare(_repo, _selectedCommits[1], _selectedCommits[0]);
-            }
             else
             {
+                // Two or more commits selected (Ctrl/Cmd+click or Shift+click range): compare the
+                // oldest and newest selected commits (by position in the history list), which shows
+                // the combined changes between them, like `git diff <oldest> <newest>`.
                 _searchCommitContext.Selected = null;
-                DetailContext = new Models.Count(_selectedCommits.Count);
+
+                var (oldest, newest) = GetSelectionEndpoints();
+                if (_detailContext is RevisionCompare compare)
+                    compare.SetTargets(oldest, newest);
+                else
+                    DetailContext = new RevisionCompare(_repo, oldest, newest);
             }
 
             if (_repo.UIStates.GraphHighlighting >= Models.CommitGraphHighlighting.SelectedCommitsOnly)
                 GenerateGraph(_commits);
+        }
+
+        private (Models.Commit oldest, Models.Commit newest) GetSelectionEndpoints()
+        {
+            var selected = new HashSet<string>();
+            foreach (var c in _selectedCommits)
+                selected.Add(c.SHA);
+
+            Models.Commit newest = null;
+            Models.Commit oldest = null;
+            foreach (var c in _commits)
+            {
+                if (!selected.Contains(c.SHA))
+                    continue;
+
+                newest ??= c;
+                oldest = c;
+            }
+
+            // Fallback if selected commits are not in the current list (should not happen).
+            if (newest == null || oldest == null || newest == oldest)
+                return (_selectedCommits[^1], _selectedCommits[0]);
+
+            return (oldest, newest);
         }
 
         private void GenerateGraph(List<Models.Commit> commits)
